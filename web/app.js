@@ -1,3 +1,81 @@
+// --- Transport layer (auto-detects Glimpse native window vs HTTP/WebSocket) ---
+var _sendToHost;
+var _closeHost;
+
+if (window.glimpse) {
+  // Glimpse native window — IPC via glimpse bridge
+  _sendToHost = function(message) {
+    window.glimpse.send(message);
+  };
+  _closeHost = function() {
+    try { window.glimpse.close(); } catch (_) {}
+  };
+  // Host → browser messages arrive via eval'd JS calling window.__reviewReceive()
+} else {
+  // HTTP + WebSocket mode
+  _closeHost = function() {};
+
+  var _sessionToken = JSON.parse(document.getElementById("session-token").textContent || '""');
+  var _wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+  var _wsUrl = _wsProtocol + "//" + location.host + "/?token=" + encodeURIComponent(_sessionToken);
+  var _ws = null;
+  var _wsConnected = false;
+  var _disconnectBanner = null;
+  var _outboundQueue = [];
+
+  _sendToHost = function(message) {
+    var data = JSON.stringify(message);
+    if (_ws && _ws.readyState === WebSocket.OPEN) {
+      _ws.send(data);
+    } else {
+      _outboundQueue.push(data);
+    }
+  };
+
+  (function _connectWebSocket() {
+    _ws = new WebSocket(_wsUrl);
+
+    _ws.addEventListener("open", function() {
+      _wsConnected = true;
+      // hide disconnect banner
+      if (_disconnectBanner) {
+        _disconnectBanner.remove();
+        _disconnectBanner = null;
+      }
+      for (var i = 0; i < _outboundQueue.length; i++) {
+        _ws.send(_outboundQueue[i]);
+      }
+      _outboundQueue = [];
+    });
+
+    _ws.addEventListener("message", function(event) {
+      try {
+        var message = JSON.parse(event.data);
+        if (typeof window.__reviewReceive === "function") {
+          window.__reviewReceive(message);
+        }
+      } catch (_) {}
+    });
+
+    _ws.addEventListener("close", function(event) {
+      _wsConnected = false;
+      if (!_disconnectBanner) {
+        _disconnectBanner = document.createElement("div");
+        _disconnectBanner.className = "fixed top-0 inset-x-0 z-[200] bg-red-900/90 text-white text-center py-2 text-sm font-medium";
+        _disconnectBanner.textContent = event.code === 1000
+          ? "Review session ended."
+          : "Disconnected from review server. Refresh to reconnect.";
+        document.body.appendChild(_disconnectBanner);
+      }
+    });
+
+    _ws.addEventListener("error", function() {
+      _wsConnected = false;
+    });
+  })();
+}
+// --- End transport layer ---
+
 const reviewData = JSON.parse(document.getElementById("diff-review-data").textContent || "{}");
 
 const state = {
@@ -85,19 +163,21 @@ function inferLanguage(path) {
 }
 
 function scopeLabel(scope) {
+  const ref = reviewData.baseRef || "HEAD";
   switch (scope) {
-    case "git-diff": return "Git diff";
-    case "last-commit": return "Last commit";
+    case "git-diff": return ref === "HEAD" ? "Git diff" : `Diff vs ${ref}`;
+    case "last-commit": return ref === "HEAD" ? "Last commit" : `${ref} commit`;
     default: return "All files";
   }
 }
 
 function scopeHint(scope) {
+  const ref = reviewData.baseRef || "HEAD";
   switch (scope) {
     case "git-diff":
-      return "Review working tree changes against HEAD. Hover or click line numbers in the gutter to add an inline comment.";
+      return `Review working tree changes against ${ref}. Hover or click line numbers in the gutter to add an inline comment.`;
     case "last-commit":
-      return "Review the last commit against its parent. Hover or click line numbers in the gutter to add an inline comment.";
+      return `Review ${ref} against its parent. Hover or click line numbers in the gutter to add an inline comment.`;
     default:
       return "Review the current working tree snapshot. Hover or click line numbers in the gutter to add a code review comment.";
   }
@@ -355,9 +435,7 @@ function ensureFileLoaded(fileId, scope = state.currentScope) {
   const requestId = `request:${Date.now()}:${++requestSequence}`;
   state.pendingRequestIds[key] = requestId;
   renderTree();
-  if (window.glimpse?.send) {
-    window.glimpse.send({ type: "request-file", requestId, fileId, scope });
-  }
+  _sendToHost({ type: "request-file", requestId, fileId, scope });
 }
 
 function openFile(fileId) {
@@ -1028,13 +1106,13 @@ submitButton.addEventListener("click", () => {
       .map((comment) => ({ ...comment, body: comment.body.trim() }))
       .filter((comment) => comment.body.length > 0),
   };
-  window.glimpse.send(payload);
-  window.glimpse.close();
+  _sendToHost(payload);
+  _closeHost();
 });
 
 cancelButton.addEventListener("click", () => {
-  window.glimpse.send({ type: "cancel" });
-  window.glimpse.close();
+  _sendToHost({ type: "cancel" });
+  _closeHost();
 });
 
 overallCommentButton.addEventListener("click", () => {

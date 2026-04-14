@@ -1,7 +1,7 @@
 {
   "name": "pi-diff-review",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "check": "tsgo --noEmit",
@@ -13,6 +13,9 @@
     ]
   },
   "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
     "glimpseui": "^0.6.0"
   },
   "peerDependencies": {
@@ -20,6 +23,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
+    "@types/ws": "^8.18.0",
     "@typescript/native-preview": "^7.0.0-dev.20260313.1",
     "husky": "^9.1.7",
     "typescript": "^5.9.2"
